@@ -44,6 +44,71 @@ def _direction_vector(zenith, azimuth):
     return np.array([-sz * ca, -sz * sa, -cz])
 
 
+def _nice_step(span, n=5):
+    """Paso "redondo" (1/2/5 x 10^k) que da ~n intervalos a lo largo de `span`."""
+    if span <= 0:
+        return 1.0
+    raw = span / n
+    mag = 10.0 ** np.floor(np.log10(raw))
+    r = raw / mag
+    return (1.0 if r < 1.5 else 2.0 if r < 3.0 else 5.0 if r < 7.0 else 10.0) * mag
+
+
+def _multiples(lo, hi, step):
+    """Multiplos de `step` dentro de [lo, hi]."""
+    return np.arange(np.ceil(lo / step) * step, hi + 1e-9, step)
+
+
+def _zaxis_traces(geo, ticklen=80.0, major=500.0, minor=100.0):
+    """Regla vertical de z, fija en el lado derecho (+x) del detector.
+
+    Reemplaza el eje z automatico de Plotly (que salta de esquina al rotar la
+    camara) por una linea real con marcas y etiquetas, anclada al borde +x del
+    arreglo, para que se quede siempre a la derecha.
+    """
+    x0 = float(geo.x.max()) + 120.0
+    y0 = float(geo.y.mean())
+    zmin, zmax = float(geo.z.min()), float(geo.z.max())
+    traces = []
+
+    # linea del eje
+    traces.append(go.Scatter3d(
+        x=[x0, x0], y=[y0, y0], z=[zmin, zmax], mode="lines",
+        line=dict(color="black", width=2), hoverinfo="skip", showlegend=False))
+
+    # marcas menores (sin etiqueta), saltando las que coinciden con una mayor
+    tx, ty, tz = [], [], []
+    for zt in _multiples(zmin, zmax, minor):
+        if abs(zt - major * round(zt / major)) < 1e-6:
+            continue
+        tx += [x0, x0 + 0.5 * ticklen, None]; ty += [y0, y0, None]; tz += [zt, zt, None]
+    traces.append(go.Scatter3d(
+        x=tx, y=ty, z=tz, mode="lines",
+        line=dict(color="black", width=1), hoverinfo="skip", showlegend=False))
+
+    # marcas mayores + etiquetas
+    mx, my, mz = [], [], []
+    lx, ly, lz, ltext = [], [], [], []
+    for zt in _multiples(zmin, zmax, major):
+        mx += [x0, x0 + ticklen, None]; my += [y0, y0, None]; mz += [zt, zt, None]
+        lx.append(x0 + ticklen + 40.0); ly.append(y0); lz.append(zt)
+        ltext.append(str(int(round(zt))))
+    traces.append(go.Scatter3d(
+        x=mx, y=my, z=mz, mode="lines",
+        line=dict(color="black", width=2), hoverinfo="skip", showlegend=False))
+    traces.append(go.Scatter3d(
+        x=lx, y=ly, z=lz, mode="text", text=ltext,
+        textposition="middle right", textfont=dict(size=11, color="black"),
+        hoverinfo="skip", showlegend=False))
+
+    # etiqueta "z [m]" arriba de la regla
+    traces.append(go.Scatter3d(
+        x=[x0], y=[y0], z=[zmax + 0.10 * (zmax - zmin)], mode="text",
+        text=["z [m]"], textposition="top center",
+        textfont=dict(size=12, color="black"), hoverinfo="skip", showlegend=False))
+    return traces
+
+
 def _track_segment(event, default_length=1000.0):
     """Extremos (a, b) de la traza; b es la punta hacia adelante (propagacion)."""
     d = _direction_vector(event.zenith, event.azimuth)
@@ -116,8 +181,9 @@ def _bubble_trace(event, chargescale, size_range, colorscale):
         i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
         intensity=intensity, colorscale=colorscale, reversescale=True,
         showscale=True, flatshading=False,
-        colorbar=dict(title="tiempo [us]", thickness=14, len=0.5,
-                      x=0.02, xanchor="left", y=0.5),
+        colorbar=dict(title=dict(text="tiempo [us]", side="bottom"),
+                      orientation="h", thickness=14, len=0.6,
+                      x=0.5, xanchor="center", y=0.02, yanchor="bottom"),
         lighting=dict(ambient=0.5, diffuse=0.9, specular=0.4, roughness=0.4,
                       fresnel=0.2),
         lightposition=dict(x=400, y=-2000, z=1600),
@@ -145,6 +211,7 @@ def event_display(event, show_track=True, chargescale=6.0, size_range=(5.0, 28.0
     """Dibujar un evento. Devuelve una figura de Plotly (se muestra sola en Colab)."""
     geo = event.geometry
     traces = _detector_traces(geo)
+    traces += _zaxis_traces(geo)
     traces.append(_bubble_trace(event, chargescale, size_range, colorscale))
     if show_track and np.isfinite(event.zenith):
         traces += _track_traces(event, default_length, track_color, conesize)
@@ -157,13 +224,13 @@ def event_display(event, show_track=True, chargescale=6.0, size_range=(5.0, 28.0
     fig = go.Figure(traces)
     fig.update_layout(
         title=dict(text=title, x=0.5, xanchor="center", font=dict(size=15)),
-        height=height, margin=dict(l=0, r=0, t=40, b=0),
+        height=height, margin=dict(l=0, r=0, t=40, b=50),
         showlegend=True,
         legend=dict(x=0.98, xanchor="right", y=0.98, yanchor="top",
                     bgcolor="rgba(255,255,255,0.7)"),
         scene=dict(
             xaxis=dict(visible=False), yaxis=dict(visible=False),
-            zaxis=dict(title="z [m]", showbackground=False),
+            zaxis=dict(visible=False),   # regla de z propia, fija a la derecha
             aspectmode="data",
             camera=dict(eye=dict(x=0.25, y=-1.7, z=0.6),
                         up=dict(x=0, y=0, z=1))))
